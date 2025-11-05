@@ -1,5 +1,5 @@
 
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import ReactDOM from 'react-dom/client';
 import { GoogleGenAI, Modality } from "@google/genai";
 
@@ -10,6 +10,7 @@ const App = () => {
   const [prompt, setPrompt] = useState<string>('');
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+  const [activeFilter, setActiveFilter] = useState<string>('none');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const fileToGenerativePart = async (file: File) => {
@@ -23,13 +24,104 @@ const App = () => {
     };
   };
 
+  useEffect(() => {
+    if (!originalImage) {
+        setOriginalImageUrl(null);
+        return;
+    };
+
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const img = new Image();
+    img.crossOrigin = "Anonymous";
+    img.src = URL.createObjectURL(originalImage);
+
+    img.onload = () => {
+        canvas.width = img.naturalWidth;
+        canvas.height = img.naturalHeight;
+        
+        let filterString = 'none';
+        switch(activeFilter) {
+            case 'grayscale': filterString = 'grayscale(100%)'; break;
+            case 'sepia': filterString = 'sepia(100%)'; break;
+            case 'vintage': filterString = 'sepia(70%) contrast(110%) brightness(90%)'; break;
+            case 'invert': filterString = 'invert(100%)'; break;
+            case 'glow': filterString = 'brightness(1.2) saturate(1.3) contrast(1.05)'; break;
+            case 'sketch': filterString = 'grayscale(1) contrast(150%) brightness(110%)'; break;
+        }
+
+        ctx.filter = filterString;
+        ctx.drawImage(img, 0, 0);
+        
+        setOriginalImageUrl(canvas.toDataURL(originalImage.type));
+        URL.revokeObjectURL(img.src); // Clean up blob URL
+    };
+
+  }, [originalImage, activeFilter]);
+
+
+  const getFilteredImageFile = (): Promise<File> => {
+    return new Promise((resolve, reject) => {
+        if (activeFilter === 'none' && originalImage) {
+            resolve(originalImage);
+            return;
+        }
+        if (!originalImage) {
+            reject(new Error("No image to filter"));
+            return;
+        }
+
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+            reject(new Error("Could not get canvas context"));
+            return;
+        }
+
+        const img = new Image();
+        img.crossOrigin = "Anonymous";
+        img.src = URL.createObjectURL(originalImage);
+
+        img.onload = () => {
+            canvas.width = img.naturalWidth;
+            canvas.height = img.naturalHeight;
+
+            let filterString = 'none';
+            switch(activeFilter) {
+                case 'grayscale': filterString = 'grayscale(100%)'; break;
+                case 'sepia': filterString = 'sepia(100%)'; break;
+                case 'vintage': filterString = 'sepia(70%) contrast(110%) brightness(90%)'; break;
+                case 'invert': filterString = 'invert(100%)'; break;
+                case 'glow': filterString = 'brightness(1.2) saturate(1.3) contrast(1.05)'; break;
+                case 'sketch': filterString = 'grayscale(1) contrast(150%) brightness(110%)'; break;
+            }
+            
+            ctx.filter = filterString;
+            ctx.drawImage(img, 0, 0);
+
+            canvas.toBlob((blob) => {
+                if (blob) {
+                    const filteredFile = new File([blob], originalImage.name, { type: originalImage.type });
+                    resolve(filteredFile);
+                } else {
+                    reject(new Error("Canvas toBlob failed"));
+                }
+            }, originalImage.type);
+            URL.revokeObjectURL(img.src);
+        };
+        img.onerror = reject;
+    });
+  };
+
   const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
       setOriginalImage(file);
-      setOriginalImageUrl(URL.createObjectURL(file));
       setEditedImageUrl(null);
       setError(null);
+      setActiveFilter('none');
     }
   };
 
@@ -45,11 +137,12 @@ const App = () => {
 
     try {
       const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-      const imagePart = await fileToGenerativePart(originalImage);
+      const imageToProcess = await getFilteredImageFile();
+      const imagePart = await fileToGenerativePart(imageToProcess);
       const textPart = { text: prompt };
 
       const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash-image',
+        model: 'gemini-flash-lite-latest',
         contents: {
           parts: [imagePart, textPart],
         },
@@ -90,6 +183,7 @@ const App = () => {
     setEditedImageUrl(null);
     setPrompt('');
     setError(null);
+    setActiveFilter('none');
     if(fileInputRef.current) {
         fileInputRef.current.value = '';
     }
@@ -104,6 +198,8 @@ const App = () => {
     link.click();
     document.body.removeChild(link);
   };
+
+  const filters = ['none', 'grayscale', 'sepia', 'vintage', 'invert', 'glow', 'sketch'];
 
   return (
     <>
@@ -219,6 +315,36 @@ const App = () => {
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
+        }
+        
+        .filter-buttons {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(80px, 1fr));
+            gap: 0.5rem;
+        }
+
+        .filter-button {
+            padding: 0.5rem;
+            font-size: 0.875rem;
+            font-weight: 500;
+            border: 1px solid var(--border-color);
+            background-color: #fff;
+            color: var(--subtle-text);
+            border-radius: 0.375rem;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            text-transform: capitalize;
+        }
+        
+        .filter-button:hover {
+            background-color: #f9fafb;
+            border-color: #d1d5db;
+        }
+        
+        .filter-button.active {
+            background-color: var(--primary-color-end);
+            color: #fff;
+            border-color: var(--primary-color-end);
         }
 
         .prompt-textarea {
@@ -448,9 +574,25 @@ const App = () => {
                 <span className="upload-button-text">{originalImage ? originalImage.name : 'Choose a file...'}</span>
               </label>
             </div>
+            
+            <div className="control-section">
+              <label>2. Apply a Filter</label>
+              <div className="filter-buttons">
+                {filters.map(filter => (
+                  <button
+                    key={filter}
+                    className={`filter-button ${activeFilter === filter ? 'active' : ''}`}
+                    onClick={() => setActiveFilter(filter)}
+                    disabled={!originalImage}
+                  >
+                    {filter}
+                  </button>
+                ))}
+              </div>
+            </div>
 
             <div className="control-section">
-              <label htmlFor="prompt-input">2. Edit Instruction</label>
+              <label htmlFor="prompt-input">3. Edit Instruction</label>
               <textarea
                 id="prompt-input"
                 className="prompt-textarea"
@@ -488,7 +630,7 @@ const App = () => {
               <h2>Original</h2>
               <div className="image-content">
                 {originalImageUrl ? (
-                    <img src={originalImageUrl} alt="Original" className="image-display" />
+                    <img src={originalImageUrl} alt="Original with filter" className="image-display" />
                 ) : (
                     <div className="image-placeholder">
                         <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline></svg>
